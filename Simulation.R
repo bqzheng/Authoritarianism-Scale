@@ -1232,7 +1232,7 @@ true_delta <- 2.0
 J <- 8
 dif_items <- paste0("auth_", 1:4)
 anchor_items <- paste0("auth_", 5:8)
-cuts <- c(-Inf, 1, 0, 0.5, Inf)
+cuts <- c(-Inf, -1, -0.5, 0, 0.5, 1,  Inf)
 n_thresh <- length(cuts) - 1
 dif_values <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7)
 
@@ -1447,6 +1447,473 @@ for (p in 1:nrow(param_grid)) {
 }
 
 all_results_df <- bind_rows(all_results)
+
+############################################################
+# 3. Average estimates per DIF and parameter combination
+############################################################
+summary_df <- all_results_df %>%
+  group_by(DIF, Method, lambda_dif, resid_sd) %>%
+  summarise(Mean = mean(Estimate, na.rm = TRUE), .groups = "drop")
+
+############################################################
+# 4. Plot 9 panels
+############################################################
+ggplot(summary_df, aes(x = DIF, y = Mean, color = Method, group = Method)) +
+  geom_line(size = 1.2) +
+  geom_point(aes(shape = Method), size = 3, stroke = 1.2, color = "black") +
+  scale_shape_manual(values = c(2, 16)) + # triangle for Raw, circle for Partial
+  geom_hline(yintercept = true_delta, linetype = "dashed", color = "black") +
+  facet_grid(resid_sd ~ lambda_dif, labeller = label_both) +
+  labs(x = "DIF Magnitude", y = "Estimated Group Difference",
+       title = "Raw vs Partial Invariance CFA Across DIF Levels") +
+  theme_minimal(base_size = 14) +
+  scale_color_manual(values = c("steelblue", "#9A1543")) +
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 1))
+
+
+
+
+
+####### new plot. 7 categories
+
+sset.seed(2026)
+
+############################################################
+# 1. Simulation Parameters
+############################################################
+library(lavaan)
+library(dplyr)
+library(ggplot2)
+
+
+set.seed(2026)
+
+R <- 100                  # Monte Carlo repetitions
+N <- 1000                 # Increased sample size to improve convergence
+true_delta <- 2.0         # True latent mean difference
+J <- 8                     # Total items
+dif_items <- paste0("auth_", 1:4)
+anchor_items <- paste0("auth_", 5:8)
+cuts <- c(-Inf, -1, -0.5, 0, 0.5, 1, Inf)
+n_thresh <- length(cuts) - 1
+dif_values <- c(0.0, 0.1, 0.2, 0.3, 0.4, 0.5)
+
+# Safer combinations to improve convergence
+lambda_dif_values <- c(1.0, 1.0, 1.0, 1.0)
+resid_sd_values <- c(0.1, 0.2, 0.3, 0.4)  
+
+param_grid <- expand.grid(lambda_dif = lambda_dif_values,
+                          resid_sd = resid_sd_values)
+
+############################################################
+# 2. Run Simulations
+############################################################
+all_results <- list()
+
+for (p in 1:nrow(param_grid)) {
+  
+  lambda_dif <- param_grid$lambda_dif[p]
+  resid_sd <- param_grid$resid_sd[p]
+  
+  results_all <- list()
+  
+  for (dif_shift in dif_values) {
+    results <- data.frame(raw = rep(NA, R), partial = rep(NA, R))
+    
+    for (r in 1:R) {
+      # Create groups
+      group <- rep(0:1, each = N/2)
+      Author <- rnorm(N, mean = true_delta * group)
+      sim_data <- data.frame(group = group)
+      
+      # Generate items
+      for (j in 1:J) {
+        item <- paste0("auth_", j)
+        lambda <- ifelse(item %in% anchor_items, 1.0, lambda_dif)
+        y <- lambda * Author + rnorm(N, sd = resid_sd)
+        
+        # Add DIF for first 4 items
+        if (item %in% dif_items) y <- y + dif_shift * group
+        
+        sim_data[[item]] <- ordered(cut(y, cuts))
+      }
+      
+      # ---------------------
+      # Raw mean difference
+      # ---------------------
+      sim_data$raw <- rowMeans(sapply(sim_data[dif_items], as.numeric))
+      results$raw[r] <- mean(sim_data$raw[group == 1]) - mean(sim_data$raw[group == 0])
+      
+      # ---------------------
+      # Partial invariance CFA
+      # ---------------------
+      model_full <- paste0("Author =~ ", paste0("auth_", 1:J, collapse = " + "))
+      
+      # Free only first threshold of each DIF item
+      free_thresholds <- as.vector(sapply(dif_items, function(x) paste0(x, "|t1")))
+      
+      fit_partial <- try(
+        cfa(model_full,
+            data = sim_data,
+            group = "group",
+            ordered = paste0("auth_", 1:J),
+            meanstructure = TRUE,
+            estimator = "WLSMV",
+            group.equal = c("loadings","thresholds"),
+            group.partial = free_thresholds),
+        silent = TRUE
+      )
+      
+      if (!inherits(fit_partial, "try-error") && inspect(fit_partial, "converged")) {
+        pe <- parameterEstimates(fit_partial)
+        lv <- subset(pe, lhs == "Author" & op == "~1")
+        lv <- lv[order(lv$group), ]
+        if (nrow(lv) == 2) results$partial[r] <- lv$est[2] - lv$est[1]
+      }
+    }
+    
+    results_all[[paste0("DIF_", dif_shift)]] <- results
+  }
+  
+  # Combine results for plotting
+  plot_data <- do.call(rbind, lapply(names(results_all), function(nm) {
+    dif_level <- as.numeric(sub("DIF_", "", nm))
+    res <- results_all[[nm]]
+    data.frame(
+      DIF = dif_level,
+      Method = rep(c("Raw", "Partial"), each = nrow(res)),
+      Estimate = c(res$raw, res$partial)
+    )
+  }))
+  
+  # Add parameter info
+  plot_data$lambda_dif <- lambda_dif
+  plot_data$resid_sd <- resid_sd
+  
+  all_results[[p]] <- plot_data
+}
+
+# Combine all results
+all_results_df <- bind_rows(all_results)
+
+# ---------------------
+# Remove missing values
+# ---------------------
+all_results_df <- all_results_df %>%
+  filter(!is.na(Estimate))
+
+############################################################
+# 3. Average estimates per DIF and parameter combination
+############################################################
+summary_df <- all_results_df %>%
+  group_by(DIF, Method, lambda_dif, resid_sd) %>%
+  summarise(Mean = mean(Estimate, na.rm = TRUE), .groups = "drop")
+
+############################################################
+# 4. Plot 9 panels
+############################################################
+ggplot(summary_df, aes(x = DIF, y = Mean, color = Method, group = Method)) +
+  geom_line(size = 1.2) +
+  geom_point(aes(shape = Method), size = 3, stroke = 1.2, color = "black") +
+  scale_shape_manual(values = c(2, 16)) + # triangle for Raw, circle for Partial
+  geom_hline(yintercept = true_delta, linetype = "dashed", color = "black") +
+  facet_grid(resid_sd ~ lambda_dif, labeller = label_both) +
+  labs(x = "DIF Magnitude", y = "Estimated Group Difference",
+       title = "Raw vs Partial Invariance CFA Across DIF Levels") +
+  theme_minimal(base_size = 14) +
+  scale_color_manual(values = c("steelblue", "#9A1543")) +
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 1))
+
+
+
+
+
+
+
+####### new plot. 5 categories
+
+sset.seed(2026)
+
+############################################################
+# 1. Simulation Parameters
+############################################################
+library(lavaan)
+library(dplyr)
+library(ggplot2)
+
+
+set.seed(2026)
+
+R <- 100                  # Monte Carlo repetitions
+N <- 1000                 # Increased sample size to improve convergence
+true_delta <- 2.0         # True latent mean difference
+J <- 8                     # Total items
+dif_items <- paste0("auth_", 1:4)
+anchor_items <- paste0("auth_", 5:8)
+cuts <- c(-Inf, -1, 0, 1, Inf)
+n_thresh <- length(cuts) - 1
+dif_values <- c(0.0, 0.1, 0.2, 0.3, 0.4, 0.5)
+
+# Safer combinations to improve convergence
+lambda_dif_values <- c(1.0, 1.0, 1.0, 1.0)
+resid_sd_values <- c(0.1, 0.2, 0.3, 0.4)  
+
+param_grid <- expand.grid(lambda_dif = lambda_dif_values,
+                          resid_sd = resid_sd_values)
+
+############################################################
+# 2. Run Simulations
+############################################################
+all_results <- list()
+
+for (p in 1:nrow(param_grid)) {
+  
+  lambda_dif <- param_grid$lambda_dif[p]
+  resid_sd <- param_grid$resid_sd[p]
+  
+  results_all <- list()
+  
+  for (dif_shift in dif_values) {
+    results <- data.frame(raw = rep(NA, R), partial = rep(NA, R))
+    
+    for (r in 1:R) {
+      # Create groups
+      group <- rep(0:1, each = N/2)
+      Author <- rnorm(N, mean = true_delta * group)
+      sim_data <- data.frame(group = group)
+      
+      # Generate items
+      for (j in 1:J) {
+        item <- paste0("auth_", j)
+        lambda <- ifelse(item %in% anchor_items, 1.0, lambda_dif)
+        y <- lambda * Author + rnorm(N, sd = resid_sd)
+        
+        # Add DIF for first 4 items
+        if (item %in% dif_items) y <- y + dif_shift * group
+        
+        sim_data[[item]] <- ordered(cut(y, cuts))
+      }
+      
+      # ---------------------
+      # Raw mean difference
+      # ---------------------
+      sim_data$raw <- rowMeans(sapply(sim_data[dif_items], as.numeric))
+      results$raw[r] <- mean(sim_data$raw[group == 1]) - mean(sim_data$raw[group == 0])
+      
+      # ---------------------
+      # Partial invariance CFA
+      # ---------------------
+      model_full <- paste0("Author =~ ", paste0("auth_", 1:J, collapse = " + "))
+      
+      # Free only first threshold of each DIF item
+      free_thresholds <- as.vector(sapply(dif_items, function(x) paste0(x, "|t1")))
+      
+      fit_partial <- try(
+        cfa(model_full,
+            data = sim_data,
+            group = "group",
+            ordered = paste0("auth_", 1:J),
+            meanstructure = TRUE,
+            estimator = "WLSMV",
+            group.equal = c("loadings","thresholds"),
+            group.partial = free_thresholds),
+        silent = TRUE
+      )
+      
+      if (!inherits(fit_partial, "try-error") && inspect(fit_partial, "converged")) {
+        pe <- parameterEstimates(fit_partial)
+        lv <- subset(pe, lhs == "Author" & op == "~1")
+        lv <- lv[order(lv$group), ]
+        if (nrow(lv) == 2) results$partial[r] <- lv$est[2] - lv$est[1]
+      }
+    }
+    
+    results_all[[paste0("DIF_", dif_shift)]] <- results
+  }
+  
+  # Combine results for plotting
+  plot_data <- do.call(rbind, lapply(names(results_all), function(nm) {
+    dif_level <- as.numeric(sub("DIF_", "", nm))
+    res <- results_all[[nm]]
+    data.frame(
+      DIF = dif_level,
+      Method = rep(c("Raw", "Partial"), each = nrow(res)),
+      Estimate = c(res$raw, res$partial)
+    )
+  }))
+  
+  # Add parameter info
+  plot_data$lambda_dif <- lambda_dif
+  plot_data$resid_sd <- resid_sd
+  
+  all_results[[p]] <- plot_data
+}
+
+# Combine all results
+all_results_df <- bind_rows(all_results)
+
+# ---------------------
+# Remove missing values
+# ---------------------
+all_results_df <- all_results_df %>%
+  filter(!is.na(Estimate))
+
+############################################################
+# 3. Average estimates per DIF and parameter combination
+############################################################
+summary_df <- all_results_df %>%
+  group_by(DIF, Method, lambda_dif, resid_sd) %>%
+  summarise(Mean = mean(Estimate, na.rm = TRUE), .groups = "drop")
+
+############################################################
+# 4. Plot 9 panels
+############################################################
+ggplot(summary_df, aes(x = DIF, y = Mean, color = Method, group = Method)) +
+  geom_line(size = 1.2) +
+  geom_point(aes(shape = Method), size = 3, stroke = 1.2, color = "black") +
+  scale_shape_manual(values = c(2, 16)) + # triangle for Raw, circle for Partial
+  geom_hline(yintercept = true_delta, linetype = "dashed", color = "black") +
+  facet_grid(resid_sd ~ lambda_dif, labeller = label_both) +
+  labs(x = "DIF Magnitude", y = "Estimated Group Difference",
+       title = "Raw vs Partial Invariance CFA Across DIF Levels") +
+  theme_minimal(base_size = 14) +
+  scale_color_manual(values = c("steelblue", "#9A1543")) +
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 1))
+
+
+
+
+
+
+
+
+####### new plot. 2 categories
+
+set.seed(2026)
+
+############################################################
+# 1. Simulation Parameters
+############################################################
+library(lavaan)
+library(dplyr)
+library(ggplot2)
+
+
+set.seed(2026)
+
+R <- 100                  # Monte Carlo repetitions
+N <- 1000                 # Increased sample size to improve convergence
+true_delta <- 2.0         # True latent mean difference
+J <- 8                     # Total items
+dif_items <- paste0("auth_", 1:4)
+anchor_items <- paste0("auth_", 5:8)
+cuts <- c(-Inf, 0, Inf)
+n_thresh <- length(cuts) - 1
+dif_values <- c(0.0, 0.1, 0.2, 0.3, 0.4, 0.5)
+
+# Safer combinations to improve convergence
+lambda_dif_values <- c(1.0, 1.0, 1.0, 1.0)
+resid_sd_values <- c(0.1, 0.2, 0.3, 0.4)  
+
+param_grid <- expand.grid(lambda_dif = lambda_dif_values,
+                          resid_sd = resid_sd_values)
+
+############################################################
+# 2. Run Simulations
+############################################################
+all_results <- list()
+
+for (p in 1:nrow(param_grid)) {
+  
+  lambda_dif <- param_grid$lambda_dif[p]
+  resid_sd <- param_grid$resid_sd[p]
+  
+  results_all <- list()
+  
+  for (dif_shift in dif_values) {
+    results <- data.frame(raw = rep(NA, R), partial = rep(NA, R))
+    
+    for (r in 1:R) {
+      # Create groups
+      group <- rep(0:1, each = N/2)
+      Author <- rnorm(N, mean = true_delta * group)
+      sim_data <- data.frame(group = group)
+      
+      # Generate items
+      for (j in 1:J) {
+        item <- paste0("auth_", j)
+        lambda <- ifelse(item %in% anchor_items, 1.0, lambda_dif)
+        y <- lambda * Author + rnorm(N, sd = resid_sd)
+        
+        # Add DIF for first 4 items
+        if (item %in% dif_items) y <- y + dif_shift * group
+        
+        sim_data[[item]] <- ordered(cut(y, cuts))
+      }
+      
+      # ---------------------
+      # Raw mean difference
+      # ---------------------
+      sim_data$raw <- rowMeans(sapply(sim_data[dif_items], as.numeric))
+      results$raw[r] <- mean(sim_data$raw[group == 1]) - mean(sim_data$raw[group == 0])
+      
+      # ---------------------
+      # Partial invariance CFA
+      # ---------------------
+      model_full <- paste0("Author =~ ", paste0("auth_", 1:J, collapse = " + "))
+      
+      # Free only first threshold of each DIF item
+      free_thresholds <- as.vector(sapply(dif_items, function(x) paste0(x, "|t1")))
+      
+      fit_partial <- try(
+        cfa(model_full,
+            data = sim_data,
+            group = "group",
+            ordered = paste0("auth_", 1:J),
+            meanstructure = TRUE,
+            estimator = "WLSMV",
+            group.equal = c("loadings","thresholds"),
+            group.partial = free_thresholds),
+        silent = TRUE
+      )
+      
+      if (!inherits(fit_partial, "try-error") && inspect(fit_partial, "converged")) {
+        pe <- parameterEstimates(fit_partial)
+        lv <- subset(pe, lhs == "Author" & op == "~1")
+        lv <- lv[order(lv$group), ]
+        if (nrow(lv) == 2) results$partial[r] <- lv$est[2] - lv$est[1]
+      }
+    }
+    
+    results_all[[paste0("DIF_", dif_shift)]] <- results
+  }
+  
+  # Combine results for plotting
+  plot_data <- do.call(rbind, lapply(names(results_all), function(nm) {
+    dif_level <- as.numeric(sub("DIF_", "", nm))
+    res <- results_all[[nm]]
+    data.frame(
+      DIF = dif_level,
+      Method = rep(c("Raw", "Partial"), each = nrow(res)),
+      Estimate = c(res$raw, res$partial)
+    )
+  }))
+  
+  # Add parameter info
+  plot_data$lambda_dif <- lambda_dif
+  plot_data$resid_sd <- resid_sd
+  
+  all_results[[p]] <- plot_data
+}
+
+# Combine all results
+all_results_df <- bind_rows(all_results)
+
+# ---------------------
+# Remove missing values
+# ---------------------
+all_results_df <- all_results_df %>%
+  filter(!is.na(Estimate))
 
 ############################################################
 # 3. Average estimates per DIF and parameter combination

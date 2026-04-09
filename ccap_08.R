@@ -166,6 +166,13 @@ fit4 <- cfa(
 lavTestLRT(fit1, fit2, fit3, fit4)
 
 
+
+##### report fit3 
+
+summary(fit3, standardized = TRUE)
+
+
+
 #######################################
 
 Variable name:

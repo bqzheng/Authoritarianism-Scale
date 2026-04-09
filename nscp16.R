@@ -110,6 +110,11 @@ lavTestLRT(fit1, fit2, fit3, fit4)
 
 
 
+###### summary table for fit3 
+
+summary(fit3, standardized = TRUE)
+
+
 
 ####### plot 
 

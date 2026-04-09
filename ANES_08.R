@@ -83,6 +83,12 @@ lavTestLRT(fit1, fit2, fit3, fit4)
 
 
 
+###### Report fit3 for factor loadings. 
+
+
+summary(fit3, fit.measures = TRUE, standardized = TRUE)
+
+
 
 library(lavaan)
 
@@ -1941,5 +1947,6 @@ ggplot(df_long, aes(x = estimate, y = item, color = method)) +
     panel.grid.major = element_line(color = "white"),
     panel.grid.minor = element_line(color = "white")
   )
+
 
 

@@ -463,6 +463,8 @@ anchor_items <- paste0("auth_", 5:8)   # anchor items
 
 cuts <- c(-Inf, -1, 0, 1, Inf)
 n_thresh <- length(cuts) - 1
+free_thresholds <- paste0(dif_items, "|t1")
+
 
 ############################################################
 ## 2. Storage
@@ -1209,6 +1211,951 @@ ggplot(plot_summary, aes(x = DIF, y = Mean, color = Method, group = Method, fill
 
 
 
+########### I try to create the partial invariance with using anchor items 
+
+
+
+set.seed(2026)
+
+############################################################
+# 1. Simulation Parameters
+############################################################
+R <- 100
+N <- 1000
+true_delta <- 2.0
+J <- 8
+
+# All items
+items <- paste0("auth_", 1:J)
+
+# Ordinal cuts
+cuts <- c(-Inf, -1, -0.5, 0, 0.5, 1, Inf)
+n_thresh <- length(cuts) - 1
+
+# DIF magnitudes
+dif_values <- c(0, 0.1, 0.2, 0.3, 0.4, 0.5)
+results_all <- list()
+
+# Item parameters
+lambda <- 1.0
+error_variances <- c(0.01, 0.05, 0.10, 0.15, 0.25)
+
+############################################################
+# 2. Monte Carlo Simulation
+############################################################
+for (dif_shift in dif_values) {
+  
+  results <- data.frame(
+    raw = rep(NA, R),
+    cfa = rep(NA, R)
+  )
+  
+  for (r in 1:R) {
+    
+    # Two groups
+    group <- rep(0:1, each = N/2)
+    Author <- rnorm(N, mean = true_delta * group)
+    
+    sim_data <- data.frame(group = group)
+    
+    # Generate ALL items with DIF
+    for (j in 1:J) {
+      item <- paste0("auth_", j)
+      
+      y <- lambda * Author + rnorm(N, mean = 0, sd = sqrt(error_variance))
+      
+      # DIF applied to ALL items
+      y <- y + dif_shift * group
+      
+      sim_data[[item]] <- ordered(cut(y, cuts))
+    }
+    
+    # ---------------------
+    # Raw mean difference
+    # ---------------------
+    sim_data$raw <- rowMeans(sapply(sim_data[items], as.numeric))
+    results$raw[r] <- mean(sim_data$raw[group == 1]) -
+      mean(sim_data$raw[group == 0])
+    
+    # ---------------------
+    # CFA (NO anchor items)
+    # ---------------------
+    model_full <- paste0(
+      "Author =~ ", paste(items, collapse = " + ")
+    )
+    
+    fit_cfa <- try(
+      cfa(
+        model_full,
+        data = sim_data,
+        group = "group",
+        ordered = items,
+        meanstructure = TRUE,
+        estimator = "WLSMV",
+        
+        # Only constrain loadings
+        group.equal = c("loadings")
+        
+        # No threshold constraints, no partial invariance
+      ),
+      silent = TRUE
+    )
+    
+    if (!inherits(fit_cfa, "try-error") && inspect(fit_cfa, "converged")) {
+      pe <- parameterEstimates(fit_cfa)
+      lv <- subset(pe, lhs == "Author" & op == "~1")
+      lv <- lv[order(lv$group), ]
+      
+      if (nrow(lv) == 2) {
+        results$cfa[r] <- lv$est[2] - lv$est[1]
+      }
+    }
+  }
+  
+  results_all[[paste0("DIF_", dif_shift)]] <- results
+}
+
+############################################################
+# 3. Prepare data for plotting
+############################################################
+plot_data <- do.call(rbind, lapply(names(results_all), function(nm) {
+  dif_level <- as.numeric(sub("DIF_", "", nm))
+  res <- results_all[[nm]]
+  
+  data.frame(
+    DIF = dif_level,
+    Method = rep(c("Raw", "CFA (No Anchors)"), each = nrow(res)),
+    Estimate = c(res$raw, res$cfa)
+  )
+}))
+
+# Remove NA
+plot_data <- plot_data[!is.na(plot_data$Estimate), ]
+
+# Summary stats
+plot_summary <- aggregate(
+  Estimate ~ DIF + Method,
+  data = plot_data,
+  FUN = function(x) c(Mean = mean(x), SD = sd(x))
+)
+
+plot_summary <- do.call(data.frame, plot_summary)
+names(plot_summary)[3:4] <- c("Mean", "SD")
+
+############################################################
+# 4. Plot
+############################################################
+library(ggplot2)
+
+ggplot(plot_summary,
+       aes(x = DIF, y = Mean, color = Method, group = Method, fill = Method)) +
+  
+  geom_line(size = 1.2) +
+  
+  geom_point(aes(shape = Method),
+             size = 3, stroke = 1.2, color = "black") +
+  
+  geom_hline(yintercept = true_delta,
+             linetype = "dashed", color = "black") +
+  
+  labs(
+    x = "DIF Magnitude",
+    y = "Estimated Group Difference",
+    title = "No Anchor Items: Raw vs CFA"
+  ) +
+  
+  scale_color_manual(values = c("steelblue", "#9A1543")) +
+  scale_fill_manual(values = c("steelblue", "#9A1543")) +
+  scale_shape_manual(values = c(17, 21)) +
+  scale_x_continuous(breaks = dif_values) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1)
+  )
+
+
+
+####### compare anchor and without anchor items 
+
+
+
+
+############################################################
+# 1. Simulation parameters
+############################################################
+set.seed(2026)
+
+library(lavaan)
+library(ggplot2)
+
+############################################################
+# 1. Simulation Parameters
+############################################################
+R <- 100
+N <- 1000
+true_delta <- 2.0
+J <- 8
+
+items <- paste0("auth_", 1:J)
+
+anchor_items <- paste0("auth_", 5:8)
+dif_items <- paste0("auth_", 1:4)
+
+cuts <- c(-Inf, -1, 0, 1, Inf)
+n_thresh <- length(cuts) - 1
+
+dif_values <- c(0, 0.1, 0.2, 0.3, 0.4, 0.5)
+
+lambda <- 1
+error_variance <- c(0.01, 0.10, 0.15, 0.25)
+
+results_all <- list()
+
+############################################################
+# 2. Monte Carlo Simulation
+############################################################
+for (dif_shift in dif_values) {
+  
+  results <- data.frame(
+    raw = rep(NA, R),
+    anchor_cfa = rep(NA, R),
+    naive_cfa = rep(NA, R)
+  )
+  
+  for (r in 1:R) {
+    
+    group <- rep(0:1, each = N/2)
+    eta <- rnorm(N, mean = true_delta * group)
+    
+    sim_data <- data.frame(group = group)
+    
+    # Generate items
+    for (j in 1:J) {
+      
+      item <- paste0("auth_", j)
+      
+      y <- lambda * eta +
+        rnorm(N, mean = 0, sd = sqrt(error_variance))
+      
+      # DIF for first 4 items
+      if (item %in% dif_items) {
+        y <- y + dif_shift * group
+      }
+      
+      sim_data[[item]] <- ordered(cut(y, cuts))
+    }
+    
+    ########################################################
+    # 1. Multi-item raw score
+    ########################################################
+    sim_data$raw <- rowMeans(sapply(sim_data[items], as.numeric))
+    results$raw[r] <- mean(sim_data$raw[group == 1]) -
+      mean(sim_data$raw[group == 0])
+    
+    ########################################################
+    # Common model
+    ########################################################
+    model <- paste0("F =~ ", paste(items, collapse = " + "))
+    
+    ########################################################
+    # 2. Anchor-based MG-CFA (correct model)
+    ########################################################
+    fit_anchor <- try(
+      cfa(
+        model,
+        data = sim_data,
+        group = "group",
+        ordered = items,
+        estimator = "WLSMV",
+        meanstructure = TRUE,
+        
+        group.equal = c("loadings", "thresholds"),
+        group.partial = paste0(
+          dif_items, "|t", rep(1:n_thresh, each = length(dif_items))
+        )
+      ),
+      silent = TRUE
+    )
+    
+    if (!inherits(fit_anchor, "try-error") &&
+        inspect(fit_anchor, "converged")) {
+      
+      pe <- parameterEstimates(fit_anchor)
+      lv <- subset(pe, lhs == "F" & op == "~1")
+      lv <- lv[order(lv$group), ]
+      
+      if (nrow(lv) == 2) {
+        results$anchor_cfa[r] <- lv$est[2] - lv$est[1]
+      }
+    }
+    
+    ########################################################
+    # 3. No-anchor MG-CFA (misspecified)
+    ########################################################
+    fit_naive <- try(
+      cfa(
+        model,
+        data = sim_data,
+        group = "group",
+        ordered = items,
+        estimator = "WLSMV",
+        meanstructure = TRUE,
+        
+        group.equal = c("loadings", "thresholds")
+      ),
+      silent = TRUE
+    )
+    
+    if (!inherits(fit_naive, "try-error") &&
+        inspect(fit_naive, "converged")) {
+      
+      pe <- parameterEstimates(fit_naive)
+      lv <- subset(pe, lhs == "F" & op == "~1")
+      lv <- lv[order(lv$group), ]
+      
+      if (nrow(lv) == 2) {
+        results$naive_cfa[r] <- lv$est[2] - lv$est[1]
+      }
+    }
+  }
+  
+  results_all[[paste0("DIF_", dif_shift)]] <- results
+}
+
+############################################################
+# 3. Prepare plotting data
+############################################################
+plot_data <- do.call(rbind, lapply(names(results_all), function(nm) {
+  
+  dif_level <- as.numeric(sub("DIF_", "", nm))
+  res <- results_all[[nm]]
+  
+  data.frame(
+    DIF = dif_level,
+    Method = rep(c("Multi-item", "Anchor-Based", "No Anchors"),
+                 each = nrow(res)),
+    Estimate = c(res$raw, res$anchor_cfa, res$naive_cfa)
+  )
+}))
+
+# Remove missing
+plot_data <- plot_data[!is.na(plot_data$Estimate), ]
+
+# Fix ordering (IMPORTANT for correct mapping)
+plot_data$Method <- factor(
+  plot_data$Method,
+  levels = c("Multi-item", "Anchor-Based", "No Anchors")
+)
+
+plot_summary <- aggregate(
+  Estimate ~ DIF + Method,
+  data = plot_data,
+  FUN = mean
+)
+
+############################################################
+# 4. Plot (your requested styling)
+############################################################
+ggplot(plot_summary,
+       aes(x = DIF, y = Estimate,
+           color = Method, group = Method)) +
+  
+  geom_line(size = 1.2) +
+  
+  geom_point(aes(shape = Method),
+             size = 3,
+             stroke = 1.2,
+             color = "black") +
+  
+  scale_shape_manual(values = c(
+    "Multi-item" = 2,     # blue triangle
+    "Anchor-Based" = 16,   # red circle
+    "No Anchors" = 17      # orange triangle
+  )) +
+  
+  geom_hline(yintercept = true_delta,
+             linetype = "dashed",
+             color = "black") +
+  
+  labs(
+    x = "DIF Magnitude",
+    y = "Estimated Group Difference",
+    title = ""
+  ) +
+  
+  scale_color_manual(values = c(
+    "Multi-item" = "steelblue",
+    "Anchor-Based" = "red",
+    "No Anchors" = "orange"
+  )) +
+  
+  theme_minimal(base_size = 14) +
+  
+  theme(
+    panel.border = element_rect(color = "black",
+                                fill = NA,
+                                linewidth = 1)
+  )
+
+
+
+
+##########  Anchor vs No Anchor combined plot 
+
+
+
+
+
+set.seed(2026)
+
+library(lavaan)
+library(ggplot2)
+
+############################################################
+# 1. Simulation parameters
+############################################################
+R <- 100
+N <- 1000
+true_delta <- 2.0
+J <- 8
+
+items <- paste0("auth_", 1:J)
+dif_items <- paste0("auth_", 1:4)
+
+############################################################
+# Category structures
+############################################################
+cuts_list <- list(
+  "3cat" = c(-Inf, -1, 1, Inf),
+  "5cat" = c(-Inf, -1, 0, 1, Inf),
+  "7cat" = c(-Inf, -1, -0.5, 0, 0.5, 1, Inf)
+)
+
+############################################################
+# Experimental factors
+############################################################
+dif_values <- c(0, 0.1, 0.2, 0.3, 0.4, 0.5)
+error_variances <- c(0.01, 0.05, 0.10, 0.25)
+
+lambda <- 0.8
+
+results_all <- list()
+
+############################################################
+# 2. Monte Carlo simulation (full factorial)
+############################################################
+for (cat_name in names(cuts_list)) {
+  
+  cuts <- cuts_list[[cat_name]]
+  
+  for (error_variance in error_variances) {
+    
+    for (dif_shift in dif_values) {
+      
+      results <- data.frame(
+        raw = rep(NA, R),
+        anchor_cfa = rep(NA, R),
+        naive_cfa = rep(NA, R)
+      )
+      
+      for (r in 1:R) {
+        
+        group <- rep(0:1, each = N/2)
+        eta <- rnorm(N, mean = true_delta * group)
+        
+        sim_data <- data.frame(group = group)
+        
+        ########################################################
+        # Generate ordinal items
+        ########################################################
+        for (j in 1:J) {
+          
+          item <- paste0("auth_", j)
+          
+          y <- lambda * eta +
+            rnorm(N, mean = 0, sd = sqrt(error_variance))
+          
+          # DIF for first 4 items
+          if (item %in% dif_items) {
+            y <- y + dif_shift * group
+          }
+          
+          sim_data[[item]] <- ordered(cut(y, cuts))
+        }
+        
+        ########################################################
+        # Multi-item raw score
+        ########################################################
+        sim_data$raw <- rowMeans(sapply(sim_data[items], as.numeric))
+        results$raw[r] <- mean(sim_data$raw[group == 1]) -
+          mean(sim_data$raw[group == 0])
+        
+        ########################################################
+        # CFA model
+        ########################################################
+        model <- paste0("F =~ ", paste(items, collapse = " + "))
+        
+        ########################################################
+        # Anchor-based MG-CFA (correct)
+        ########################################################
+        fit_anchor <- try(
+          cfa(
+            model,
+            data = sim_data,
+            group = "group",
+            ordered = items,
+            estimator = "WLSMV",
+            meanstructure = TRUE,
+            
+            group.equal = c("loadings", "thresholds"),
+            group.partial = paste0(
+              dif_items, "|t", rep(1:(length(cuts) - 1),
+                                   each = length(dif_items))
+            )
+          ),
+          silent = TRUE
+        )
+        
+        if (!inherits(fit_anchor, "try-error") &&
+            inspect(fit_anchor, "converged")) {
+          
+          pe <- parameterEstimates(fit_anchor)
+          lv <- subset(pe, lhs == "F" & op == "~1")
+          lv <- lv[order(lv$group), ]
+          
+          if (nrow(lv) == 2) {
+            results$anchor_cfa[r] <- lv$est[2] - lv$est[1]
+          }
+        }
+        
+        ########################################################
+        # No-anchor MG-CFA
+        ########################################################
+        fit_naive <- try(
+          cfa(
+            model,
+            data = sim_data,
+            group = "group",
+            ordered = items,
+            estimator = "WLSMV",
+            meanstructure = TRUE,
+            
+            group.equal = c("loadings", "thresholds")
+          ),
+          silent = TRUE
+        )
+        
+        if (!inherits(fit_naive, "try-error") &&
+            inspect(fit_naive, "converged")) {
+          
+          pe <- parameterEstimates(fit_naive)
+          lv <- subset(pe, lhs == "F" & op == "~1")
+          lv <- lv[order(lv$group), ]
+          
+          if (nrow(lv) == 2) {
+            results$naive_cfa[r] <- lv$est[2] - lv$est[1]
+          }
+        }
+      }
+      
+      results_all[[paste0(cat_name,
+                          "_EV_", error_variance,
+                          "_DIF_", dif_shift)]] <- results
+    }
+  }
+}
+
+############################################################
+# 3. Build plotting dataset
+############################################################
+plot_data <- do.call(rbind, lapply(names(results_all), function(nm) {
+  
+  parts <- strsplit(nm, "_")[[1]]
+  
+  cat_type <- parts[1]
+  ev <- as.numeric(parts[3])
+  dif <- as.numeric(parts[5])
+  
+  res <- results_all[[nm]]
+  
+  data.frame(
+    Category = cat_type,
+    ErrorVariance = ev,
+    DIF = dif,
+    Method = rep(c("Multi-item", "Anchor-Based", "No Anchors"),
+                 each = nrow(res)),
+    Estimate = c(res$raw, res$anchor_cfa, res$naive_cfa)
+  )
+}))
+
+plot_data <- plot_data[!is.na(plot_data$Estimate), ]
+
+############################################################
+# Factor labels (YOUR REQUEST)
+############################################################
+plot_data$Category <- factor(
+  plot_data$Category,
+  levels = c("3cat", "5cat", "7cat"),
+  labels = c("3 Cat", "5 Cat", "7 Cat")
+)
+
+plot_data$Method <- factor(
+  plot_data$Method,
+  levels = c("Multi-item", "Anchor-Based", "No Anchors")
+)
+
+plot_summary <- aggregate(
+  Estimate ~ Category + ErrorVariance + DIF + Method,
+  data = plot_data,
+  FUN = mean
+)
+
+############################################################
+# 4. Plot
+############################################################
+############################################################
+# Relabel Error Variance (compact labels)
+############################################################
+plot_summary$ErrorVariance <- factor(
+  plot_summary$ErrorVariance,
+  levels = c(0.01, 0.05, 0.10, 0.25),
+  labels = c(
+    "error var = 0.01",
+    "error var = 0.05",
+    "error var = 0.10",
+    "error var = 0.25"
+  )
+)
+
+############################################################
+# Plot
+############################################################
+ggplot(plot_summary,
+       aes(x = DIF, y = Estimate,
+           color = Method, group = Method)) +
+  
+  geom_line(linewidth = 1.1) +
+  
+  geom_point(aes(shape = Method),
+             size = 3,
+             stroke = 1.1,
+             color = "black") +
+  
+  scale_shape_manual(values = c(
+    "Multi-item" = 2,    # open triangle
+    "Anchor-Based" = 16, # solid circle
+    "No Anchors" = 17    # solid triangle
+  )) +
+  
+  geom_hline(yintercept = true_delta,
+             linetype = "dashed",
+             color = "black") +
+  
+  facet_grid(ErrorVariance ~ Category) +
+  
+  labs(
+    x = "DIF Magnitude",
+    y = "Estimated Group Difference",
+    title = ""
+  ) +
+  
+  scale_color_manual(values = c(
+    "Multi-item" = "steelblue",
+    "Anchor-Based" = "red",
+    "No Anchors" = "orange"
+  )) +
+  
+  theme_minimal(base_size = 14) +
+  
+  theme(
+    panel.border = element_rect(color = "black",
+                                fill = NA,
+                                linewidth = 1)
+  )
+
+
+
+######## Partial Invariance, Full Invariance, and Multi-Item 
+
+
+set.seed(2026)
+
+library(lavaan)
+library(ggplot2)
+
+############################################################
+# 1. Simulation parameters
+############################################################
+R <- 100
+N <- 1000
+true_delta <- 2.0
+J <- 8
+
+items <- paste0("auth_", 1:J)
+dif_items <- paste0("auth_", 1:4)
+
+############################################################
+# Category structures
+############################################################
+cuts_list <- list(
+  "3cat" = c(-Inf, -1, 1, Inf),
+  "5cat" = c(-Inf, -1, 0, 1, Inf),
+  "7cat" = c(-Inf, -1, -0.5, 0, 0.5, 1, Inf)
+)
+
+############################################################
+# Experimental factors
+############################################################
+dif_values <- c(0, 0.1, 0.2, 0.3, 0.4, 0.5)
+error_variances <- c(0.01, 0.05, 0.10, 0.25)
+
+lambda <- 1.0
+
+results_all <- list()
+
+############################################################
+# 2. Monte Carlo simulation
+############################################################
+for (cat_name in names(cuts_list)) {
+  
+  cuts <- cuts_list[[cat_name]]
+  
+  for (error_variance in error_variances) {
+    
+    for (dif_shift in dif_values) {
+      
+      results <- data.frame(
+        raw = rep(NA, R),
+        anchor_cfa = rep(NA, R),
+        full_cfa = rep(NA, R)
+      )
+      
+      for (r in 1:R) {
+        
+        group <- rep(0:1, each = N/2)
+        eta <- rnorm(N, mean = true_delta * group)
+        
+        sim_data <- data.frame(group = group)
+        
+        ########################################################
+        # Generate ordinal items
+        ########################################################
+        for (j in 1:J) {
+          
+          item <- paste0("auth_", j)
+          
+          y <- lambda * eta +
+            rnorm(N, mean = 0, sd = sqrt(error_variance))
+          
+          # DIF only for first 4 items
+          if (item %in% dif_items) {
+            y <- y + dif_shift * group
+          }
+          
+          sim_data[[item]] <- ordered(cut(y, cuts))
+        }
+        
+        ########################################################
+        # Multi-item scale
+        ########################################################
+        sim_data$raw <- rowMeans(sapply(sim_data[items], as.numeric))
+        results$raw[r] <- mean(sim_data$raw[group == 1]) -
+          mean(sim_data$raw[group == 0])
+        
+        ########################################################
+        # CFA model
+        ########################################################
+        model <- paste0("F =~ ", paste(items, collapse = " + "))
+        
+        ########################################################
+        # 1. Anchor-based partial invariance CFA (correct)
+        ########################################################
+        fit_anchor <- try(
+          cfa(
+            model,
+            data = sim_data,
+            group = "group",
+            ordered = items,
+            estimator = "WLSMV",
+            meanstructure = TRUE,
+            
+            group.equal = c("loadings", "thresholds"),
+            group.partial = paste0(
+              dif_items, "|t",
+              rep(1:(length(cuts) - 1),
+                  each = length(dif_items))
+            )
+          ),
+          silent = TRUE
+        )
+        
+        if (!inherits(fit_anchor, "try-error") &&
+            inspect(fit_anchor, "converged")) {
+          
+          pe <- parameterEstimates(fit_anchor)
+          lv <- subset(pe, lhs == "F" & op == "~1")
+          lv <- lv[order(lv$group), ]
+          
+          if (nrow(lv) == 2) {
+            results$anchor_cfa[r] <- lv$est[2] - lv$est[1]
+          }
+        }
+        
+        ########################################################
+        # 2. Full scalar invariance CFA (no-anchor, misspecified)
+        ########################################################
+        fit_full <- try(
+          cfa(
+            model,
+            data = sim_data,
+            group = "group",
+            ordered = items,
+            estimator = "WLSMV",
+            meanstructure = TRUE,
+            
+            group.equal = c("loadings", "thresholds")
+          ),
+          silent = TRUE
+        )
+        
+        if (!inherits(fit_full, "try-error") &&
+            inspect(fit_full, "converged")) {
+          
+          pe <- parameterEstimates(fit_full)
+          lv <- subset(pe, lhs == "F" & op == "~1")
+          lv <- lv[order(lv$group), ]
+          
+          if (nrow(lv) == 2) {
+            results$full_cfa[r] <- lv$est[2] - lv$est[1]
+          }
+        }
+      }
+      
+      results_all[[paste0(cat_name,
+                          "_EV_", error_variance,
+                          "_DIF_", dif_shift)]] <- results
+    }
+  }
+}
+
+############################################################
+# 3. Build plotting dataset
+############################################################
+plot_data <- do.call(rbind, lapply(names(results_all), function(nm) {
+  
+  parts <- strsplit(nm, "_")[[1]]
+  
+  cat_type <- parts[1]
+  ev <- as.numeric(parts[3])
+  dif <- as.numeric(parts[5])
+  
+  res <- results_all[[nm]]
+  
+  data.frame(
+    Category = cat_type,
+    ErrorVariance = ev,
+    DIF = dif,
+    Method = rep(c("Multi-item",
+                   "Anchor-Based",
+                   "Full Invariance"),
+                 each = nrow(res)),
+    Estimate = c(res$raw,
+                 res$anchor_cfa,
+                 res$full_cfa)
+  )
+}))
+
+plot_data <- plot_data[!is.na(plot_data$Estimate), ]
+
+############################################################
+# Labels
+############################################################
+plot_data$Category <- factor(
+  plot_data$Category,
+  levels = c("3cat", "5cat", "7cat"),
+  labels = c("3 Cat", "5 Cat", "7 Cat")
+)
+
+plot_data$ErrorVariance <- factor(
+  plot_data$ErrorVariance,
+  levels = c(0.01, 0.05, 0.10, 0.25),
+  labels = c(
+    "error var = 0.01",
+    "error var = 0.05",
+    "error var = 0.10",
+    "error var = 0.25"
+  )
+)
+
+plot_data$Method <- factor(
+  plot_data$Method,
+  levels = c("Multi-item",
+             "Partial Invariance",
+             "Full Invariance")
+)
+
+############################################################
+# 4. Aggregate
+############################################################
+plot_summary <- aggregate(
+  Estimate ~ Category + ErrorVariance + DIF + Method,
+  data = plot_data,
+  FUN = mean
+)
+
+############################################################
+# 5. Plot
+############################################################
+ggplot(plot_summary,
+       aes(x = DIF, y = Estimate,
+           color = Method, group = Method)) +
+  
+  geom_line(linewidth = 1.1) +
+  
+  geom_point(aes(shape = Method),
+             size = 3,
+             stroke = 1.1,
+             color = "black") +
+  
+  scale_shape_manual(values = c(
+    "Multi-item" = 2,
+    "Partial Invariance" = 16,
+    "Full Invariance" = 17
+  )) +
+  
+  scale_linetype_manual(values = c(
+    "Multi-item" = "dotted",
+    "Partial Invariance" = "solid",
+    "Full Invariance" = "dashed"
+  )) +
+  geom_hline(yintercept = true_delta,
+             linetype = "dashed",
+             color = "black") +
+  
+  facet_grid(ErrorVariance ~ Category) +
+  
+  labs(
+    x = "DIF Magnitude",
+    y = "Estimated Group Difference",
+    title = ""
+  ) +
+  
+  scale_color_manual(values = c(
+    "Multi-item" = "steelblue",
+    "Anchor-Based" = "red",
+    "Full Invariance" = "orange"
+  )) +
+  
+  theme_minimal(base_size = 14) +
+  
+  theme(
+    panel.border = element_rect(color = "black",
+                                fill = NA,
+                                linewidth = 1)
+  )
+
+
 
 
 
@@ -1336,6 +2283,9 @@ ggplot(summary_df, aes(x = DIF, y = Mean, color = Method, group = Method)) +
   theme_minimal(base_size = 14) +
   scale_color_manual(values = c("steelblue", "#9A1543")) +
   theme(panel.border = element_rect(color = "black", fill = NA, size = 1))
+
+
+
 
 
 
@@ -1787,9 +2737,7 @@ ggplot(summary_df, aes(x = DIF, y = Mean, color = Method, group = Method)) +
 
 
 
-####### new plot. 2 categories
-
-set.seed(2026)
+####### new plot. 3 categories
 
 ############################################################
 # 1. Simulation Parameters
@@ -1798,25 +2746,27 @@ library(lavaan)
 library(dplyr)
 library(ggplot2)
 
-
 set.seed(2026)
 
-R <- 100                  # Monte Carlo repetitions
-N <- 500                 # Increased sample size to improve convergence
-true_delta <- 2.0         # True latent mean difference
-J <- 8                     # Total items
+R <- 100
+N <- 1000
+true_delta <- 2.0
+J <- 8
 dif_items <- paste0("auth_", 1:4)
 anchor_items <- paste0("auth_", 5:8)
-cuts <- c(-Inf, 0, Inf)
+
+# Ordinal cuts (3 categories)
+cuts <- c(-Inf, -1, 1, Inf)
 n_thresh <- length(cuts) - 1
+
 dif_values <- c(0.0, 0.1, 0.2, 0.3, 0.4, 0.5)
 
-# Safer combinations to improve convergence
-lambda_dif_values <- c(1.0, 1.0, 1.0, 1.0)
-resid_sd_values   <- c(0.6, 0.6, 0.6, 0.6)
+# Parameter values
+factor_loading_values <- c(1.0, 1.0, 1.0, 1.0)
+error_variance_values <- c(0.01, 0.04, 0.09, 0.16)  # sd = 0.1, 0.2, 0.3, 0.4
 
-param_grid <- expand.grid(lambda_dif = lambda_dif_values,
-                          resid_sd = resid_sd_values)
+param_grid <- expand.grid(factor_loading = factor_loading_values,
+                          error_variance = error_variance_values)
 
 ############################################################
 # 2. Run Simulations
@@ -1825,15 +2775,17 @@ all_results <- list()
 
 for (p in 1:nrow(param_grid)) {
   
-  lambda_dif <- param_grid$lambda_dif[p]
-  resid_sd <- param_grid$resid_sd[p]
+  factor_loading <- param_grid$factor_loading[p]
+  error_variance <- param_grid$error_variance[p]
   
   results_all <- list()
   
   for (dif_shift in dif_values) {
+    
     results <- data.frame(raw = rep(NA, R), partial = rep(NA, R))
     
     for (r in 1:R) {
+      
       # Create groups
       group <- rep(0:1, each = N/2)
       Author <- rnorm(N, mean = true_delta * group)
@@ -1842,10 +2794,11 @@ for (p in 1:nrow(param_grid)) {
       # Generate items
       for (j in 1:J) {
         item <- paste0("auth_", j)
-        lambda <- ifelse(item %in% anchor_items, 1.0, lambda_dif)
-        y <- lambda * Author + rnorm(N, sd = resid_sd)
+        lambda <- ifelse(item %in% anchor_items, 1.0, factor_loading)
         
-        # Add DIF for first 4 items
+        y <- lambda * Author + rnorm(N, sd = sqrt(error_variance))
+        
+        # Add DIF
         if (item %in% dif_items) y <- y + dif_shift * group
         
         sim_data[[item]] <- ordered(cut(y, cuts))
@@ -1855,15 +2808,15 @@ for (p in 1:nrow(param_grid)) {
       # Raw mean difference
       # ---------------------
       sim_data$raw <- rowMeans(sapply(sim_data[dif_items], as.numeric))
-      results$raw[r] <- mean(sim_data$raw[group == 1]) - mean(sim_data$raw[group == 0])
+      results$raw[r] <- mean(sim_data$raw[group == 1]) -
+        mean(sim_data$raw[group == 0])
       
       # ---------------------
       # Partial invariance CFA
       # ---------------------
       model_full <- paste0("Author =~ ", paste0("auth_", 1:J, collapse = " + "))
       
-      # Free only first threshold of each DIF item
-      free_thresholds <- as.vector(sapply(dif_items, function(x) paste0(x, "|t1")))
+      free_thresholds <- paste0(dif_items, "|t1")
       
       fit_partial <- try(
         cfa(model_full,
@@ -1872,7 +2825,7 @@ for (p in 1:nrow(param_grid)) {
             ordered = paste0("auth_", 1:J),
             meanstructure = TRUE,
             estimator = "WLSMV",
-            group.equal = c("loadings","thresholds"),
+            group.equal = c("loadings", "thresholds"),
             group.partial = free_thresholds),
         silent = TRUE
       )
@@ -1881,17 +2834,20 @@ for (p in 1:nrow(param_grid)) {
         pe <- parameterEstimates(fit_partial)
         lv <- subset(pe, lhs == "Author" & op == "~1")
         lv <- lv[order(lv$group), ]
-        if (nrow(lv) == 2) results$partial[r] <- lv$est[2] - lv$est[1]
+        if (nrow(lv) == 2) {
+          results$partial[r] <- lv$est[2] - lv$est[1]
+        }
       }
     }
     
     results_all[[paste0("DIF_", dif_shift)]] <- results
   }
   
-  # Combine results for plotting
+  # Combine results
   plot_data <- do.call(rbind, lapply(names(results_all), function(nm) {
     dif_level <- as.numeric(sub("DIF_", "", nm))
     res <- results_all[[nm]]
+    
     data.frame(
       DIF = dif_level,
       Method = rep(c("Raw", "Partial"), each = nrow(res)),
@@ -1899,43 +2855,58 @@ for (p in 1:nrow(param_grid)) {
     )
   }))
   
-  # Add parameter info
-  plot_data$lambda_dif <- lambda_dif
-  plot_data$resid_sd <- resid_sd
+  # Add parameter labels
+  plot_data$factor_loading <- factor_loading
+  plot_data$error_variance <- error_variance
   
   all_results[[p]] <- plot_data
 }
 
-# Combine all results
+# Combine all
 all_results_df <- bind_rows(all_results)
 
-# ---------------------
-# Remove missing values
-# ---------------------
+# Remove NA
 all_results_df <- all_results_df %>%
   filter(!is.na(Estimate))
 
 ############################################################
-# 3. Average estimates per DIF and parameter combination
+# 3. Summary
 ############################################################
 summary_df <- all_results_df %>%
-  group_by(DIF, Method, lambda_dif, resid_sd) %>%
+  group_by(DIF, Method, factor_loading, error_variance) %>%
   summarise(Mean = mean(Estimate, na.rm = TRUE), .groups = "drop")
 
 ############################################################
-# 4. Plot 9 panels
+# 4. Plot
 ############################################################
 ggplot(summary_df, aes(x = DIF, y = Mean, color = Method, group = Method)) +
   geom_line(size = 1.2) +
   geom_point(aes(shape = Method), size = 3, stroke = 1.2, color = "black") +
-  scale_shape_manual(values = c(2, 16)) + # triangle for Raw, circle for Partial
+  scale_shape_manual(values = c(2, 16)) +
   geom_hline(yintercept = true_delta, linetype = "dashed", color = "black") +
-  facet_grid(resid_sd ~ lambda_dif, labeller = label_both) +
-  labs(x = "DIF Magnitude", y = "Estimated Group Difference",
-       title = "Raw vs Partial Invariance CFA Across DIF Levels") +
+  facet_grid(error_variance ~ factor_loading, labeller = label_both) +
+  labs(
+    x = "DIF Magnitude",
+    y = "Estimated Group Difference",
+    title = "Raw vs Partial Invariance CFA Across DIF Levels"
+  ) +
   theme_minimal(base_size = 14) +
   scale_color_manual(values = c("steelblue", "#9A1543")) +
   theme(panel.border = element_rect(color = "black", fill = NA, size = 1))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1951,18 +2922,18 @@ set.seed(2026)
 ############################################################
 R <- 100          # Monte Carlo repetitions
 N <- 500         # Sample size per group
-true_delta <- 0.50 # True latent mean difference
+true_delta <- 0.5 # True latent mean difference
 J <- 8            # Total items
 dif_items <- paste0("auth_", 1:4)     # Items with DIF
 anchor_items <- paste0("auth_", 5:8)  # Anchor items
 
 # Ordinal cuts
-cuts <- c(-Inf, 0, Inf)
+cuts <- c(-Inf, -0.5, 0.5, Inf)
 n_thresh <- length(cuts) - 1
 
-dif_values <- 0.7
+dif_values <- c(0.0, 0.1, 0.2, 0.3) 
 results_all <- list()
-
+free_thresholds <- NULL 
 # Item parameters
 lambda_dif <- 1.0
 lambda_anchor <- 1.0
@@ -2092,8 +3063,175 @@ ggplot(plot_summary, aes(x = DIF, y = Mean, color = Method, group = Method, fill
 
 
 
+#############.  3/5/7 Categories 
 
 
 
+############################################################
+# 1. Simulation Parameters
+############################################################
+library(lavaan)
+library(dplyr)
+library(ggplot2)
+
+set.seed(2026)
+
+R <- 100
+N <- 1000
+true_delta <- 2.0
+J <- 8
+dif_items <- paste0("auth_", 1:4)
+anchor_items <- paste0("auth_", 5:8)
+
+# Different category structures
+cuts_list <- list(
+  "3 categories" = c(-Inf, -1, 1, Inf),
+  "5 categories" = c(-Inf, -1, 0, 1, Inf),
+  "7 categories" = c(-Inf, -1, -0.5, 0, 0.5, 1, Inf)
+)
+
+dif_values <- c(0.0, 0.1, 0.2, 0.3, 0.4, 0.5)
+
+# Parameters
+factor_loading_values <- c(1.0, 1.0, 1.0, 1.0)
+error_variance_values <- c(0.01, 0.05, 0.10, 0.25)
+
+param_grid <- expand.grid(factor_loading = factor_loading_values,
+                          error_variance = error_variance_values)
+
+############################################################
+# 2. Run Simulations
+############################################################
+all_results <- list()
+
+for (cat_name in names(cuts_list)) {
+  
+  cuts <- cuts_list[[cat_name]]
+  n_thresh <- length(cuts) - 1
+  
+  for (p in 1:nrow(param_grid)) {
+    
+    factor_loading <- param_grid$factor_loading[p]
+    error_variance <- param_grid$error_variance[p]
+    
+    results_all <- list()
+    
+    for (dif_shift in dif_values) {
+      
+      results <- data.frame(Multi_item = rep(NA, R),
+                            partial = rep(NA, R))
+      
+      for (r in 1:R) {
+        
+        # Groups
+        group <- rep(0:1, each = N/2)
+        Author <- rnorm(N, mean = true_delta * group)
+        sim_data <- data.frame(group = group)
+        
+        # Generate items
+        for (j in 1:J) {
+          item <- paste0("auth_", j)
+          lambda <- ifelse(item %in% anchor_items, 1.0, factor_loading)
+          
+          y <- lambda * Author + rnorm(N, sd = sqrt(error_variance))
+          
+          if (item %in% dif_items) y <- y + dif_shift * group
+          
+          sim_data[[item]] <- ordered(cut(y, cuts))
+        }
+        
+        # ---------------------
+        # Multi-item difference
+        # ---------------------
+        sim_data$multi <- rowMeans(sapply(sim_data[dif_items], as.numeric))
+        results$Multi_item[r] <- mean(sim_data$multi[group == 1]) -
+          mean(sim_data$multi[group == 0])
+        
+        # ---------------------
+        # Partial invariance CFA
+        # ---------------------
+        model_full <- paste0("Author =~ ", paste0("auth_", 1:J, collapse = " + "))
+        
+        free_thresholds <- paste0(dif_items, "|t1")
+        
+        fit_partial <- try(
+          cfa(model_full,
+              data = sim_data,
+              group = "group",
+              ordered = paste0("auth_", 1:J),
+              meanstructure = TRUE,
+              estimator = "WLSMV",
+              group.equal = c("loadings","thresholds"),
+              group.partial = free_thresholds),
+          silent = TRUE
+        )
+        
+        if (!inherits(fit_partial, "try-error") && inspect(fit_partial, "converged")) {
+          pe <- parameterEstimates(fit_partial)
+          lv <- subset(pe, lhs == "Author" & op == "~1")
+          lv <- lv[order(lv$group), ]
+          if (nrow(lv) == 2) {
+            results$partial[r] <- lv$est[2] - lv$est[1]
+          }
+        }
+      }
+      
+      results_all[[paste0("DIF_", dif_shift)]] <- results
+    }
+    
+    # Combine results
+    plot_data <- do.call(rbind, lapply(names(results_all), function(nm) {
+      dif_level <- as.numeric(sub("DIF_", "", nm))
+      res <- results_all[[nm]]
+      
+      data.frame(
+        DIF = dif_level,
+        Method = rep(c("Multi-item", "Partial"), each = nrow(res)),
+        Estimate = c(res$Multi_item, res$partial)
+      )
+    }))
+    
+    plot_data$factor_loading <- factor_loading
+    plot_data$error_variance <- error_variance
+    plot_data$Categories <- cat_name
+    
+    all_results[[length(all_results) + 1]] <- plot_data
+  }
+}
+
+# Combine all
+all_results_df <- bind_rows(all_results)
+
+# Remove NA
+all_results_df <- all_results_df %>%
+  filter(!is.na(Estimate))
+
+############################################################
+# 3. Summary
+############################################################
+summary_df <- all_results_df %>%
+  group_by(DIF, Method, factor_loading, error_variance, Categories) %>%
+  summarise(Mean = mean(Estimate, na.rm = TRUE), .groups = "drop")
+
+############################################################
+# 4. Plot (3 columns = categories)
+############################################################
+ggplot(summary_df, aes(x = DIF, y = Mean, color = Method, group = Method)) +
+  geom_line(size = 1.2) +
+  geom_point(aes(shape = Method), size = 3, stroke = 1.2, color = "black") +
+  scale_shape_manual(values = c(2, 16)) +
+  geom_hline(yintercept = true_delta, linetype = "dashed", color = "black") +
+  facet_grid(error_variance ~ Categories,
+             labeller = labeller(
+               error_variance = function(x) paste0("error_var: ", x),  # simple "error_var" label
+               Categories = function(x) x                               # just show 3, 5, 7
+             )) +
+  labs(
+    x = "DIF Magnitude",
+    y = "Estimated Group Difference"
+  ) +
+  theme_minimal(base_size = 14) +
+  scale_color_manual(values = c("steelblue", "#9A1543")) +
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 1))
 
 

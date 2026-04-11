@@ -116,7 +116,7 @@ summary(fit3, standardized = TRUE)
 
 
 
-####### plot 
+####### Threshold difference plot 
 
 
 model_nscp16 <- '
@@ -224,6 +224,29 @@ ggplot(threshold_diff, aes(x = label, y = diff, fill = type)) +
   )
 
 
+
+
+### with outline in plot area 
+
+ggplot(threshold_diff, aes(x = label, y = diff, fill = type)) +
+  geom_col(position = "dodge") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  labs(
+    x = "",
+    y = "Threshold Difference (Black - White)",
+    fill = "Type",
+    title = "2016 NSCP"
+  ) +
+  coord_cartesian(ylim = c(-1.0, 0.45)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    panel.background = element_rect(fill = "gray85", color = NA),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    panel.grid.major = element_line(color = "white"),
+    panel.grid.minor = element_line(color = "white"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
 
 
 
@@ -3403,14 +3426,15 @@ fs <- lavPredict(
   method = "regression"
 )
 
-nscp16_clean$Author_fs <- fs[, "Author"]
+Author_fs <- c(fs[[1]][, "Author"],
+               fs[[2]][, "Author"])
 
 ##############################################
 ## 5. Factor-score policy model
 ##############################################
 
 fs_model <- polr(
-  hreform ~ Author_fs + pid3 + income + age + edu + female + ownhome,
+  as.factor(hreform) ~ Author_fs + pid3 + income + age + edu + female + ownhome,
   data = nscp16_clean,
   Hess = TRUE
 )

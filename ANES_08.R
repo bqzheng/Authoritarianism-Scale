@@ -158,8 +158,7 @@ fit_partial <- cfa(
 thresholds <- parameterEstimates(fit_partial)
 
 child_thresholds <- thresholds %>%
-  filter(op == "|", lhs %in% child_items) %>%
-  select(lhs, op, rhs, group, est)
+  dplyr::filter(op == "|", lhs %in% item_vars)
 
 # -------------------------
 # RESHAPE TO WIDE FORMAT
@@ -223,17 +222,18 @@ ggplot(threshold_diff, aes(x = label, y = diff, fill = type)) +
     x = "",
     y = "Threshold Difference (Black - White)",
     fill = "Type",
-    title = "Threshold Differences (2008 ANES)"
+    title = "2008 ANES"
   ) +
   coord_cartesian(ylim = c(-1.0, 0.45)) +
   theme_minimal() +
   theme(
     panel.background = element_rect(fill = "gray85", color = NA),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8),
     panel.grid.major = element_line(color = "white"),
     panel.grid.minor = element_line(color = "white"),
-    axis.text.x = element_text(angle = 45, hjust = 1)
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5)
   )
-
 
 
 ############# Latent Mean 

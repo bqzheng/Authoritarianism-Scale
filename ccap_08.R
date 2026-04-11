@@ -492,16 +492,19 @@ ggplot(threshold_diff, aes(x = label, y = diff, fill = type)) +
     x = "",
     y = "Threshold Difference (Black - White)",
     fill = "Type",
-    title = "Threshold Differences (2008 CCAP)"
+    title = "2008 CCAP"
   ) +
   coord_cartesian(ylim = c(-1.0, 0.5)) +
   theme_minimal() +
   theme(
+    plot.title = element_text(hjust = 0.5),
     panel.background = element_rect(fill = "gray85", color = NA),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8),
     panel.grid.major = element_line(color = "white"),
     panel.grid.minor = element_line(color = "white"),
     axis.text.x = element_text(angle = 45, hjust = 1)
   )
+
 
 
 #########.  This is a very strict, hold loading, lv variance and means fixed. 

@@ -107,6 +107,11 @@ lavTestLRT(fit1, fit2, fit3, fit4)
 
 
 
+### table for fit3 
+
+summary(fit3, standardized = TRUE)
+
+
 
 ###### Threshold 
 
@@ -231,17 +236,19 @@ ggplot(threshold_diff, aes(x = label, y = diff, fill = type)) +
   labs(
     x = "",
     y = "Threshold Difference (Black − White)",
-    fill = "Item Type",
-    title = "Threshold Differences (ANES 2016)"
+    fill = "Type",
+    title = "ANES 2016"
   ) +
+  coord_cartesian(ylim = c(-1, 0.5)) +
   theme_minimal() +
   theme(
     panel.background = element_rect(fill = "gray85", color = NA),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8),
     panel.grid.major = element_line(color = "white"),
     panel.grid.minor = element_line(color = "white"),
-    axis.text.x = element_text(angle = 45, hjust = 1)
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5)
   )
-
 ##############
 
 

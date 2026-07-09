@@ -1876,8 +1876,12 @@ ggplot(plot_summary,
 
 
 
-######## Partial Invariance, Full Invariance, and Multi-Item 
 
+
+
+
+
+######## Partial Invariance, Full Invariance, and Multi-Item 
 
 set.seed(2026)
 
@@ -1927,7 +1931,7 @@ for (cat_name in names(cuts_list)) {
       
       results <- data.frame(
         raw = rep(NA, R),
-        anchor_cfa = rep(NA, R),
+        partial_cfa = rep(NA, R),
         full_cfa = rep(NA, R)
       )
       
@@ -1948,7 +1952,7 @@ for (cat_name in names(cuts_list)) {
           y <- lambda * eta +
             rnorm(N, mean = 0, sd = sqrt(error_variance))
           
-          # DIF only for first 4 items
+          # DIF for first 4 items
           if (item %in% dif_items) {
             y <- y + dif_shift * group
           }
@@ -1969,9 +1973,9 @@ for (cat_name in names(cuts_list)) {
         model <- paste0("F =~ ", paste(items, collapse = " + "))
         
         ########################################################
-        # 1. Anchor-based partial invariance CFA (correct)
+        # 1. Partial invariance (anchor-based)
         ########################################################
-        fit_anchor <- try(
+        fit_partial <- try(
           cfa(
             model,
             data = sim_data,
@@ -1979,7 +1983,6 @@ for (cat_name in names(cuts_list)) {
             ordered = items,
             estimator = "WLSMV",
             meanstructure = TRUE,
-            
             group.equal = c("loadings", "thresholds"),
             group.partial = paste0(
               dif_items, "|t",
@@ -1990,20 +1993,20 @@ for (cat_name in names(cuts_list)) {
           silent = TRUE
         )
         
-        if (!inherits(fit_anchor, "try-error") &&
-            inspect(fit_anchor, "converged")) {
+        if (!inherits(fit_partial, "try-error") &&
+            inspect(fit_partial, "converged")) {
           
-          pe <- parameterEstimates(fit_anchor)
+          pe <- parameterEstimates(fit_partial)
           lv <- subset(pe, lhs == "F" & op == "~1")
           lv <- lv[order(lv$group), ]
           
           if (nrow(lv) == 2) {
-            results$anchor_cfa[r] <- lv$est[2] - lv$est[1]
+            results$partial_cfa[r] <- lv$est[2] - lv$est[1]
           }
         }
         
         ########################################################
-        # 2. Full scalar invariance CFA (no-anchor, misspecified)
+        # 2. Full scalar invariance
         ########################################################
         fit_full <- try(
           cfa(
@@ -2013,7 +2016,6 @@ for (cat_name in names(cuts_list)) {
             ordered = items,
             estimator = "WLSMV",
             meanstructure = TRUE,
-            
             group.equal = c("loadings", "thresholds")
           ),
           silent = TRUE
@@ -2057,11 +2059,11 @@ plot_data <- do.call(rbind, lapply(names(results_all), function(nm) {
     ErrorVariance = ev,
     DIF = dif,
     Method = rep(c("Multi-item",
-                   "Anchor-Based",
+                   "Partial Invariance",
                    "Full Invariance"),
                  each = nrow(res)),
     Estimate = c(res$raw,
-                 res$anchor_cfa,
+                 res$partial_cfa,
                  res$full_cfa)
   )
 }))
@@ -2105,18 +2107,19 @@ plot_summary <- aggregate(
 )
 
 ############################################################
-# 5. Plot
+# 5. Plot (ONLY reference line dashed)
 ############################################################
 ggplot(plot_summary,
-       aes(x = DIF, y = Estimate,
-           color = Method, group = Method)) +
+       aes(x = DIF,
+           y = Estimate,
+           color = Method,
+           group = Method)) +
   
   geom_line(linewidth = 1.1) +
   
-  geom_point(aes(shape = Method),
+  geom_point(aes(shape = Method, color = Method),
              size = 3,
-             stroke = 1.1,
-             color = "black") +
+             stroke = 1.1) +
   
   scale_shape_manual(values = c(
     "Multi-item" = 2,
@@ -2124,14 +2127,11 @@ ggplot(plot_summary,
     "Full Invariance" = 17
   )) +
   
-  scale_linetype_manual(values = c(
-    "Multi-item" = "dotted",
-    "Partial Invariance" = "solid",
-    "Full Invariance" = "dashed"
-  )) +
+  # dashed TRUE VALUE line
   geom_hline(yintercept = true_delta,
              linetype = "dashed",
-             color = "black") +
+             color = "black",
+             linewidth = 0.8) +
   
   facet_grid(ErrorVariance ~ Category) +
   
@@ -2143,7 +2143,7 @@ ggplot(plot_summary,
   
   scale_color_manual(values = c(
     "Multi-item" = "steelblue",
-    "Anchor-Based" = "red",
+    "Partial Invariance" = "red",
     "Full Invariance" = "orange"
   )) +
   
@@ -2155,6 +2155,283 @@ ggplot(plot_summary,
                                 linewidth = 1)
   )
 
+
+
+####### corrected code 
+
+
+set.seed(2026)
+
+library(lavaan)
+library(ggplot2)
+
+############################################################
+# 1. Simulation parameters
+############################################################
+R <- 100
+N <- 1000
+true_delta <- 2.0
+
+# 8-item instrument
+items <- paste0("auth_", 1:8)
+
+# 4 DIF items
+dif_items <- paste0("auth_", 1:4)
+
+# 4 anchor items (invariant by construction)
+anchor_items <- paste0("auth_", 5:8)
+
+# reduced 4-item scale (used for full invariance + multi-item)
+scale4_items <- dif_items
+
+############################################################
+# 2. Design factors
+############################################################
+cuts_list <- list(
+  "3cat" = c(-Inf, -1, 1, Inf),
+  "5cat" = c(-Inf, -1, 0, 1, Inf),
+  "7cat" = c(-Inf, -1, -0.5, 0, 0.5, 1, Inf)
+)
+
+dif_values <- c(0, 0.1, 0.2, 0.3, 0.4, 0.5)
+error_variances <- c(0.01, 0.05, 0.10, 0.25)
+
+lambda <- .8
+
+results_all <- list()
+
+############################################################
+# 3. Monte Carlo simulation
+############################################################
+for (cat_name in names(cuts_list)) {
+  
+  cuts <- cuts_list[[cat_name]]
+  
+  for (error_variance in error_variances) {
+    
+    for (dif_shift in dif_values) {
+      
+      results <- data.frame(
+        multi_item = rep(NA, R),
+        partial_8 = rep(NA, R),
+        full_4 = rep(NA, R)
+      )
+      
+      for (r in 1:R) {
+        
+        group <- rep(0:1, each = N/2)
+        eta <- rnorm(N, mean = true_delta * group)
+        
+        sim_data <- data.frame(group = group)
+        
+        ####################################################
+        # Generate items
+        ####################################################
+        for (j in 1:8) {
+          
+          item <- paste0("auth_", j)
+          
+          y <- lambda * eta +
+            rnorm(N, mean = 0, sd = sqrt(error_variance))
+          
+          # DIF only on first 4 items
+          if (item %in% dif_items) {
+            y <- y + dif_shift * group
+          }
+          
+          sim_data[[item]] <- ordered(cut(y, cuts))
+        }
+        
+        ####################################################
+        # Multi-item scale (4 items only)
+        ####################################################
+        sim_data$multi_item <- rowMeans(sapply(sim_data[scale4_items], as.numeric))
+        results$multi_item[r] <- mean(sim_data$multi_item[group == 1]) -
+          mean(sim_data$multi_item[group == 0])
+        
+        ####################################################
+        # CFA model (8-item partial invariance)
+        ####################################################
+        model_8 <- paste0("F =~ ", paste(items, collapse = " + "))
+        
+        fit_partial <- try(
+          cfa(
+            model_8,
+            data = sim_data,
+            group = "group",
+            ordered = items,
+            estimator = "WLSMV",
+            meanstructure = TRUE,
+            group.equal = c("loadings", "thresholds"),
+            group.partial = paste0(
+              dif_items, "|t",
+              rep(1:(length(cuts) - 1),
+                  each = length(dif_items))
+            )
+          ),
+          silent = TRUE
+        )
+        
+        if (!inherits(fit_partial, "try-error") &&
+            inspect(fit_partial, "converged")) {
+          
+          pe <- parameterEstimates(fit_partial)
+          lv <- subset(pe, lhs == "F" & op == "~1")
+          lv <- lv[order(lv$group), ]
+          
+          if (nrow(lv) == 2) {
+            results$partial_8[r] <- lv$est[2] - lv$est[1]
+          }
+        }
+        
+        ####################################################
+        # Full invariance (4-item model)
+        ####################################################
+        model_4 <- paste0("F =~ ", paste(scale4_items, collapse = " + "))
+        
+        fit_full <- try(
+          cfa(
+            model_4,
+            data = sim_data,
+            group = "group",
+            ordered = scale4_items,
+            estimator = "WLSMV",
+            meanstructure = TRUE,
+            group.equal = c("loadings", "thresholds")
+          ),
+          silent = TRUE
+        )
+        
+        if (!inherits(fit_full, "try-error") &&
+            inspect(fit_full, "converged")) {
+          
+          pe <- parameterEstimates(fit_full)
+          lv <- subset(pe, lhs == "F" & op == "~1")
+          lv <- lv[order(lv$group), ]
+          
+          if (nrow(lv) == 2) {
+            results$full_4[r] <- lv$est[2] - lv$est[1]
+          }
+        }
+      }
+      
+      results_all[[paste0(cat_name,
+                          "_EV_", error_variance,
+                          "_DIF_", dif_shift)]] <- results
+    }
+  }
+}
+
+############################################################
+# 4. Build plotting dataset
+############################################################
+plot_data <- do.call(rbind, lapply(names(results_all), function(nm) {
+  
+  parts <- strsplit(nm, "_")[[1]]
+  
+  cat_type <- parts[1]
+  ev <- as.numeric(parts[3])
+  dif <- as.numeric(parts[5])
+  
+  res <- results_all[[nm]]
+  
+  data.frame(
+    Category = cat_type,
+    ErrorVariance = ev,
+    DIF = dif,
+    Method = rep(c("Multi-item",
+                   "Partial Invariance",
+                   "Full Invariance"),
+                 each = nrow(res)),
+    Estimate = c(res$multi_item,
+                 res$partial_8,
+                 res$full_4)
+  )
+}))
+
+plot_data <- plot_data[!is.na(plot_data$Estimate), ]
+
+############################################################
+# Labels
+############################################################
+plot_data$Category <- factor(
+  plot_data$Category,
+  levels = c("3cat", "5cat", "7cat"),
+  labels = c("3 Cat", "5 Cat", "7 Cat")
+)
+
+plot_data$ErrorVariance <- factor(
+  plot_data$ErrorVariance,
+  levels = c(0.01, 0.05, 0.10, 0.25),
+  labels = c("error var = 0.01",
+             "error var = 0.05",
+             "error var = 0.10",
+             "error var = 0.25")
+)
+
+plot_data$Method <- factor(
+  plot_data$Method,
+  levels = c("Multi-item",
+             "Partial Invariance",
+             "Full Invariance")
+)
+
+############################################################
+# 5. Aggregate
+############################################################
+plot_summary <- aggregate(
+  Estimate ~ Category + ErrorVariance + DIF + Method,
+  data = plot_data,
+  FUN = mean
+)
+
+############################################################
+# 6. Plot
+############################################################
+ggplot(plot_summary,
+       aes(x = DIF,
+           y = Estimate,
+           color = Method,
+           group = Method)) +
+  
+  geom_line(linewidth = 1.1) +
+  
+  geom_point(aes(shape = Method, color = Method),
+             size = 3,
+             stroke = 1.1) +
+  
+  scale_shape_manual(values = c(
+    "Multi-item" = 2,
+    "Partial Invariance" = 16,
+    "Full Invariance" = 17
+  )) +
+  
+  geom_hline(yintercept = true_delta,
+             linetype = "dashed",
+             color = "black",
+             linewidth = 0.8) +
+  
+  facet_grid(ErrorVariance ~ Category) +
+  
+  labs(
+    x = "DIF Magnitude",
+    y = "Estimated Group Difference",
+    title = ""
+  ) +
+  
+  scale_color_manual(values = c(
+    "Multi-item" = "steelblue",
+    "Partial Invariance" = "red",
+    "Full Invariance" = "orange"
+  )) +
+  
+  theme_minimal(base_size = 14) +
+  
+  theme(
+    panel.border = element_rect(color = "black",
+                                fill = NA,
+                                linewidth = 1)
+  )
 
 
 
